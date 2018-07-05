@@ -31,26 +31,23 @@ class Main {
 	static function getParams(req:IncomingMessage)
 	{
 
-
 		var gitr = ~/^\/(.+)(.git)?\/(info\/refs\?service=)?(git-[^-]+-pack)$/;
-		var lfsr = ~//;	
-
+		var lfsr = ~/$a/;
+			
 		//Match url for non lfs url 
-		trace('generating params from request url: ' + req.url);
+		trace('generating params from request: $req');
 		if (gitr.match(req.url)){
 			return {
-				repo : removeLineEndingsReg.replace(gitr.matched(1), ""),
+				repo : gitr.matched(1),
 				auth : parseAuth(req.headers["authorization"]),
 				service : gitr.matched(4),
 				isInfoRequest : gitr.matched(3) != null
 			}
 		}
-		if(lfsr.match(req.url)){
-			return{
-//TODO: https://github.com/git-lfs/git-lfs/blob/master/docs/api/batch.md
-//Catch batch API requests an return file locations
-
-			}
+		else if(lfsr.match(req.url)){
+			//TODO: match an lfs url correctly. what exactly do we need and then how to regex?
+			//there is a post to batch... what else?
+			throw "matched lfs regex but this is not implemented yet!";	
 		}
 		else{
 			throw 'Cannot deal with url';
@@ -203,12 +200,15 @@ class Main {
 				'https://${params.repo}';
 			else
 				'https://${params.auth.basic}@${params.repo}';
+			
+			//temp.. move to main and getParams 
+			//remove newlines
+			var r = ~/(\r\n\t|\n|\r\t)/gm;
 
 			trace("Cache Dir: " + cacheDir);
 			trace("Repo: " + params.repo);
-
-			var local = Path.join(cacheDir, params.repo);
-
+			var repo = params.repo;
+			var local = cacheDir.toString() + "/" + repo.toString();
 			trace("After join: " + local);
 		
 			authenticate(params, infos, function (upRes) {
@@ -271,7 +271,6 @@ class Main {
 	}
 	
 	static var updatePromises = new Map<String, Promise<Dynamic>>();
-	static var removeLineEndingsReg = ~/(\r\n\t|\n|\r\t|\r\n|\r)/gm;
 	static var cacheDir = "/tmp/var/cache/git/";
 	static var listenPort = 8080;
 	static var lfs = false;
@@ -297,7 +296,7 @@ Options:
 		//Set configuration
 		version = Version.readPkg(); 
 		var options = js.npm.Docopt.docopt(usage, { version : version });
-		cacheDir = removeLineEndingsReg.replace(options["--cache-dir"], "");
+		cacheDir = options["--cache-dir"];
 		listenPort = Std.parseInt(options["--port"]);
 		lfs = options["--lfs"];
 		if (listenPort == null || listenPort < 1 || listenPort > 65535){
