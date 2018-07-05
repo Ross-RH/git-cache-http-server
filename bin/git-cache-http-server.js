@@ -83,7 +83,7 @@ Main.getParams = function(req) {
 		return { repo : gitr.matched(1).replace(_this.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : gitr.matched(4), isInfoRequest : gitr.matched(3) != null};
 	}
 	if(lfsr.match(req.url)) {
-		throw new js__$Boot_HaxeError("Caught batch URL: " + req.url);
+		throw new js__$Boot_HaxeError("Caught batch URL: " + Std.string(req.headers));
 	} else {
 		throw new js__$Boot_HaxeError("Cannot deal with url");
 	}

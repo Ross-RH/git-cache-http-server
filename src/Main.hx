@@ -47,7 +47,7 @@ class Main {
 		}
 		if(lfsr.match(req.url)){
 			return{
-				throw 'Caught batch URL: '+ req.url;
+				throw 'Caught batch URL: '+ req.headers;
 			}
 		}
 		else{
