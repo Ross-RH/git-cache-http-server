@@ -33,7 +33,7 @@ class Main {
 
 
 		var gitr = ~/^\/(.+)(.git)?\/(info\/refs\?service=)?(git-[^-]+-pack)$/;
-		var lfsr = ~//;	
+		var lfsr = ~/^\/(.+)(.git)?\/(objects\/batch)$/;	
 
 		//Match url for non lfs url 
 		trace('generating params from request url: ' + req.url);
@@ -47,9 +47,7 @@ class Main {
 		}
 		if(lfsr.match(req.url)){
 			return{
-//TODO: https://github.com/git-lfs/git-lfs/blob/master/docs/api/batch.md
-//Catch batch API requests an return file locations
-
+				throw 'Caught batch URL: '+ req.url;
 			}
 		}
 		else{

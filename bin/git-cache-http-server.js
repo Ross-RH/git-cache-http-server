@@ -76,10 +76,14 @@ Main.parseAuth = function(s) {
 };
 Main.getParams = function(req) {
 	var gitr = new EReg("^/(.+)(.git)?/(info/refs\\?service=)?(git-[^-]+-pack)$","");
+	var lfsr = new EReg("^/(.+)(.git)?/(objects/batch)$","");
 	console.log("generating params from request url: " + req.url);
 	if(gitr.match(req.url)) {
 		var _this = Main.removeLineEndingsReg;
 		return { repo : gitr.matched(1).replace(_this.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : gitr.matched(4), isInfoRequest : gitr.matched(3) != null};
+	}
+	if(lfsr.match(req.url)) {
+		throw new js__$Boot_HaxeError("Caught batch URL: " + req.url);
 	} else {
 		throw new js__$Boot_HaxeError("Cannot deal with url");
 	}
