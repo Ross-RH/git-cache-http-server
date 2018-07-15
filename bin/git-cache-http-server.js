@@ -50,6 +50,39 @@ HxOverrides.substr = function(s,pos,len) {
 	}
 	return s.substr(pos,len);
 };
+var List = function() {
+	this.length = 0;
+};
+List.__name__ = true;
+List.prototype = {
+	add: function(item) {
+		var x = new _$List_ListNode(item,null);
+		if(this.h == null) {
+			this.h = x;
+		} else {
+			this.q.next = x;
+		}
+		this.q = x;
+		this.length++;
+	}
+	,pop: function() {
+		if(this.h == null) {
+			return null;
+		}
+		var x = this.h.item;
+		this.h = this.h.next;
+		if(this.h == null) {
+			this.q = null;
+		}
+		this.length--;
+		return x;
+	}
+};
+var _$List_ListNode = function(item,next) {
+	this.item = item;
+	this.next = next;
+};
+_$List_ListNode.__name__ = true;
 var Main = function() { };
 Main.__name__ = true;
 Main.safeUser = function(basic) {
@@ -76,14 +109,14 @@ Main.parseAuth = function(s) {
 };
 Main.getParams = function(req) {
 	var gitr = new EReg("^/(.+)(.git)?/(info/refs\\?service=)?(git-[^-]+-pack)$","");
-	var lfsr = new EReg("^/(.+)(.git)?/(objects/batch)$","");
+	var lfsBatchr = new EReg("^/(.+)(.git)?/(objects/batch)$","");
 	console.log("generating params from request url: " + req.url);
 	if(gitr.match(req.url)) {
 		var _this = Main.removeLineEndingsReg;
 		return { repo : gitr.matched(1).replace(_this.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : gitr.matched(4), isInfoRequest : gitr.matched(3) != null};
-	}
-	if(lfsr.match(req.url)) {
-		throw new js__$Boot_HaxeError("Caught batch URL: " + Std.string(req.headers));
+	} else if(lfsBatchr.match(req.url)) {
+		var _this1 = Main.removeLineEndingsReg;
+		return { repo : lfsBatchr.matched(1).replace(_this1.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : "lfs-batch", isInfoRequest : true};
 	} else {
 		throw new js__$Boot_HaxeError("Cannot deal with url");
 	}
@@ -188,31 +221,15 @@ Main.update = function(remote,local,infos,callback) {
 };
 Main.handleRequest = function(req,res) {
 	try {
+		console.log("");
+		console.log("==============================================");
 		console.log("Handling New Request: " + req.method + " " + req.url);
 		var params = Main.getParams(req);
 		var infos = "" + params.repo;
 		if(params.auth != null) {
 			infos += " (user " + Main.safeUser(params.auth.basic) + ")";
 		}
-		var _g = params.isInfoRequest;
-		var _g1 = req.method == "GET";
-		switch(_g1) {
-		case false:
-			if(_g != false) {
-				var m = _g1;
-				var i = _g;
-				throw new js__$Boot_HaxeError("isInfoRequest=" + (i == null ? "null" : "" + i) + " but isPOST=" + (m == null ? "null" : "" + m));
-			}
-			break;
-		case true:
-			if(_g != true) {
-				var m1 = _g1;
-				var i1 = _g;
-				throw new js__$Boot_HaxeError("isInfoRequest=" + (i1 == null ? "null" : "" + i1) + " but isPOST=" + (m1 == null ? "null" : "" + m1));
-			}
-			break;
-		}
-		if(params.service != "git-upload-pack") {
+		if(params.service != "git-upload-pack" && params.service != "lfs-batch") {
 			throw new js__$Boot_HaxeError("Service " + params.service + " not supported yet");
 		}
 		var remote = params.auth == null ? "https://" + params.repo : "https://" + params.auth.basic + "@" + params.repo;
@@ -220,72 +237,146 @@ Main.handleRequest = function(req,res) {
 		console.log("Repo: " + params.repo);
 		var local = js_node_Path.join(Main.cacheDir,params.repo);
 		console.log("After join: " + local);
-		Main.authenticate(params,infos,function(upRes) {
-			var _g2 = upRes.statusCode;
-			switch(_g2) {
-			case 200:
-				break;
-			case 401:case 403:case 404:
-				res.writeHead(upRes.statusCode,upRes.headers);
-				res.end();
-				return;
-			}
-			if(params.isInfoRequest) {
-				Main.update(remote,local,infos,function(err) {
-					if(err != null) {
-						console.log("ERR: " + err);
-						console.log(haxe_CallStack.toString(haxe_CallStack.exceptionStack()));
-						res.statusCode = 500;
-						res.end();
-						return;
-					}
-					res.statusCode = 200;
-					res.setHeader("Content-Type","application/x-" + params.service + "-advertisement");
-					res.setHeader("Cache-Control","no-cache");
-					res.write("001e# service=git-upload-pack\n0000");
-					var up = js_node_ChildProcess.spawn(params.service,["--stateless-rpc","--advertise-refs",local]);
-					up.stdout.pipe(res);
-					up.stderr.on("data",function(data) {
-						console.log("" + params.service + " stderr: " + data);
-					});
-					up.on("exit",function(code) {
-						if(code != 0) {
-							res.end();
-						}
-						console.log("INFO: " + params.service + " done with exit " + code);
-					});
-				});
-			} else {
-				res.statusCode = 200;
-				res.setHeader("Content-Type","application/x-" + params.service + "-result");
-				res.setHeader("Cache-Control","no-cache");
-				var up1 = js_node_ChildProcess.spawn(params.service,["--stateless-rpc",local]);
-				if(req.headers["content-encoding"] == "gzip") {
-					var tmp = js_node_Zlib.createUnzip();
-					req.pipe(tmp).pipe(up1.stdin);
-				} else {
-					req.pipe(up1.stdin);
-				}
-				up1.stdout.pipe(res);
-				up1.stderr.on("data",function(data1) {
-					console.log("" + params.service + " stderr: " + data1);
-				});
-				up1.on("exit",function(code1) {
-					if(code1 != 0) {
-						res.end();
-					}
-					console.log("" + params.service + " done with exit " + code1);
-				});
-			}
-		});
-	} catch( err1 ) {
-		haxe_CallStack.lastException = err1;
-		if (err1 instanceof js__$Boot_HaxeError) err1 = err1.val;
-		console.log("ERROR: " + Std.string(err1));
+		if(params.service == "git-upload-pack") {
+			console.log("");
+			console.log("Service: Git-upload-pack running...");
+			Main.serviceGitUploadPack(req,res,params,infos,remote,local);
+		} else if(params.service == "lfs-batch") {
+			console.log("");
+			console.log("Service: lfs-batch running...");
+			Main.serviceLFSBatch(req,res,params,infos,remote,local);
+		} else {
+			throw new js__$Boot_HaxeError("ERR: Service not recognise");
+		}
+	} catch( err ) {
+		haxe_CallStack.lastException = err;
+		if (err instanceof js__$Boot_HaxeError) err = err.val;
+		console.log("ERROR: " + Std.string(err));
 		console.log(haxe_CallStack.toString(haxe_CallStack.exceptionStack()));
 		res.statusCode = 500;
 		res.end();
 	}
+};
+Main.serviceGitUploadPack = function(req,res,params,infos,remote,local) {
+	Main.authenticate(params,infos,function(upRes) {
+		var _g = upRes.statusCode;
+		switch(_g) {
+		case 200:
+			break;
+		case 401:case 403:case 404:
+			res.writeHead(upRes.statusCode,upRes.headers);
+			res.end();
+			return;
+		}
+		if(params.isInfoRequest) {
+			Main.update(remote,local,infos,function(err) {
+				if(err != null) {
+					console.log("ERR: " + err);
+					console.log(haxe_CallStack.toString(haxe_CallStack.exceptionStack()));
+					res.statusCode = 500;
+					res.end();
+					return;
+				}
+				res.statusCode = 200;
+				res.setHeader("Content-Type","application/x-" + Std.string(params.service) + "-advertisement");
+				res.setHeader("Cache-Control","no-cache");
+				res.write("001e# service=git-upload-pack\n0000");
+				var up = js_node_ChildProcess.spawn(params.service,["--stateless-rpc","--advertise-refs",local]);
+				up.stdout.pipe(res);
+				up.stderr.on("data",function(data) {
+					console.log("" + Std.string(params.service) + " stderr: " + data);
+				});
+				up.on("exit",function(code) {
+					if(code != 0) {
+						res.end();
+					}
+					console.log("INFO: " + Std.string(params.service) + " done with exit " + code);
+				});
+			});
+		} else {
+			res.statusCode = 200;
+			res.setHeader("Content-Type","application/x-" + Std.string(params.service) + "-result");
+			res.setHeader("Cache-Control","no-cache");
+			var up1 = js_node_ChildProcess.spawn(params.service,["--stateless-rpc",local]);
+			if(req.headers["content-encoding"] == "gzip") {
+				var tmp = js_node_Zlib.createUnzip();
+				req.pipe(tmp).pipe(up1.stdin);
+			} else {
+				req.pipe(up1.stdin);
+			}
+			up1.stdout.pipe(res);
+			up1.stderr.on("data",function(data1) {
+				console.log("" + Std.string(params.service) + " stderr: " + data1);
+			});
+			up1.on("exit",function(code1) {
+				if(code1 != 0) {
+					res.end();
+				}
+				console.log("" + Std.string(params.service) + " done with exit " + code1);
+			});
+		}
+	});
+};
+Main.serviceLFSBatch = function(req,res,params,infos,remote,local) {
+	console.log("Caught batch URL: " + Std.string(req.headers));
+	var bodyStr = "";
+	req.on("data",function(data) {
+		bodyStr += data;
+	});
+	req.on("end",function() {
+		var requestBody = JSON.parse(bodyStr);
+		console.log("Body: " + JSON.stringify(requestBody,null," "));
+		if(requestBody.operation == "download") {
+			var resultBody = { transfer : "basic", objects : []};
+			var path = js_node_Path.join(local,"lfs/objects");
+			console.log(path);
+			var remainingProcs = new List();
+			var objects = new List();
+			var _g = 0;
+			var _g1 = requestBody.objects;
+			while(_g < _g1.length) {
+				var object = [_g1[_g]];
+				++_g;
+				var proc = js_node_ChildProcess.exec("find " + path + " -name " + Std.string(object[0].oid),(function(object1) {
+					return function(err,stdout,stderr) {
+						var objResult = { oid : object1[0].oid, size : 0, authenticated : true, actions : { download : { href : ""}}, expires_in : 2137483647};
+						if(err != null) {
+							console.log("could not find object: " + Std.string(object1[0].oid));
+						} else {
+							console.log("found object: " + stdout);
+							var location = stdout.replace(Main.removeLineEndingsReg.r,"");
+							var stats = js_node_Fs.statSync(location);
+							objResult.size = stats.size;
+							var downloadRef = "http://" + req.headers["host"] + HxOverrides.substr(location,Main.cacheDir.length,null);
+							objResult.actions.download.href = downloadRef;
+							resultBody.objects.push(objResult);
+						}
+					};
+				})(object));
+				remainingProcs.add(proc);
+				proc.on("close",(function() {
+					return function() {
+						remainingProcs.pop();
+						if(remainingProcs.length <= 0) {
+							res.writeHead(200,{ "Content-Type" : "application/vnd.git-lfs+json"});
+							console.log("Sending content: \n" + JSON.stringify(resultBody,null," "));
+							var tmp = JSON.stringify(resultBody);
+							res.end(tmp);
+						}
+					};
+				})());
+			}
+		} else if(requestBody.operation == "upload") {
+			console.log("LFS batch upload not supported");
+			res.statusCode = 501;
+			res.end();
+		} else {
+			throw new js__$Boot_HaxeError("ERR: LFS batch operation not set or recognised");
+		}
+	});
+	req.on("error",function(error) {
+		console.log("ERR reading IncommingMessage: " + error.message);
+	});
 };
 Main.main = function() {
 	Main.version = "0.0.2";
@@ -782,6 +873,7 @@ js_Boot.__string_rec = function(o,s) {
 	}
 };
 var js_node_ChildProcess = require("child_process");
+var js_node_Fs = require("fs");
 var js_node_Http = require("http");
 var js_node_Https = require("https");
 var js_node_Path = require("path");

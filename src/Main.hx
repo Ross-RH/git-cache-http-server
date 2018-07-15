@@ -31,9 +31,8 @@ class Main {
 	static function getParams(req:IncomingMessage)
 	{
 
-
 		var gitr = ~/^\/(.+)(.git)?\/(info\/refs\?service=)?(git-[^-]+-pack)$/;
-		var lfsr = ~/^\/(.+)(.git)?\/(objects\/batch)$/;	
+		var lfsBatchr = ~/^\/(.+)(.git)?\/(objects\/batch)$/;	
 
 		//Match url for non lfs url 
 		trace('generating params from request url: ' + req.url);
@@ -45,9 +44,12 @@ class Main {
 				isInfoRequest : gitr.matched(3) != null
 			}
 		}
-		if(lfsr.match(req.url)){
+		else if(lfsBatchr.match(req.url)){
 			return{
-				throw 'Caught batch URL: '+ req.headers;
+				repo : removeLineEndingsReg.replace(lfsBatchr.matched(1), ""),
+				auth : parseAuth(req.headers["authorization"]),
+				service : "lfs-batch",
+				isInfoRequest : true
 			}
 		}
 		else{
@@ -180,6 +182,8 @@ class Main {
 	static function handleRequest(req:IncomingMessage, res:ServerResponse)
 	{
 		try {
+			trace("");
+			trace("==============================================");
 			trace('Handling New Request: ${req.method} ${req.url}');
 
 			//get params from request, ensure the request is supported
@@ -187,14 +191,15 @@ class Main {
 			var infos = '${params.repo}';
 			if (params.auth != null)
 				infos += ' (user ${safeUser(params.auth.basic)})';
-			
-			switch ([req.method == "GET", params.isInfoRequest]) {
-			case [false, false], [true, true]:  // ok
-			case [m, i]: throw 'isInfoRequest=$i but isPOST=$m';
-			}
+
+			//Not applicable with lfs (POST serves as an info request)
+			//iswitch ([req.method == "GET", params.isInfoRequest]) {
+			//case [false, false], [true, true]:  // ok
+			//case [m, i]: throw 'isInfoRequest=$i but isPOST=$m';
+			//}
 
 			//authenticate
-			if (params.service != "git-upload-pack")
+			if (params.service != "git-upload-pack" && params.service != "lfs-batch")
 				throw 'Service ${params.service} not supported yet';
 
 			var remote = if (params.auth == null)
@@ -209,57 +214,25 @@ class Main {
 
 			trace("After join: " + local);
 		
-			authenticate(params, infos, function (upRes) {
-				switch (upRes.statusCode) {
-				case 401, 403, 404:
-					res.writeHead(upRes.statusCode, upRes.headers);
-					res.end();
-					return;
-				case 200:  // ok
-				}
+			//by this point we have determined what type of request it is and can wroute it to a service
 
-				if (params.isInfoRequest) {
-					update(remote, local, infos, function (err) {
-						//after updating we check for errors and then call a service to update the caller
-						if (err != null) {
-							trace('ERR: $err');
-							trace(haxe.CallStack.toString(haxe.CallStack.exceptionStack()));
-							res.statusCode = 500;
-							res.end();
-							return;
-						}
-						res.statusCode = 200;
-						res.setHeader("Content-Type", 'application/x-${params.service}-advertisement');
-						res.setHeader("Cache-Control", "no-cache");
-						res.write("001e# service=git-upload-pack\n0000");
-						var up = ChildProcess.spawn(params.service, ["--stateless-rpc", "--advertise-refs", local]);
-						up.stdout.pipe(res);
-						up.stderr.on("data", function (data) trace('${params.service} stderr: $data'));
-						up.on("exit", function (code) {
-							if (code != 0)
-								res.end();
-							trace('INFO: ${params.service} done with exit $code');
-						});
-					});
-				} else {
-					res.statusCode = 200;
-					res.setHeader("Content-Type", 'application/x-${params.service}-result');
-					res.setHeader("Cache-Control", "no-cache");
-					var up = ChildProcess.spawn(params.service, ["--stateless-rpc", local]);
-                                        // If we receive gzip content, we must unzip
-                                        if (req.headers['content-encoding'] == 'gzip')
-                                                req.pipe(Zlib.createUnzip()).pipe(up.stdin);
-                                        else
-                                                req.pipe(up.stdin);
-					up.stdout.pipe(res);
-					up.stderr.on("data", function (data) trace('${params.service} stderr: $data'));
-					up.on("exit", function (code) {
-						if (code != 0)
-							res.end();
-						trace('${params.service} done with exit $code');
-					});
-				}
-			});
+			if(params.service == "git-upload-pack")
+			{
+				trace("");
+				trace("Service: Git-upload-pack running...");
+				serviceGitUploadPack(req, res, params, infos, remote, local);
+			}
+			else if(params.service == "lfs-batch")
+			{
+				trace("");
+				trace("Service: lfs-batch running...");
+				serviceLFSBatch(req, res, params, infos, remote, local);
+			}
+			else
+			{
+				throw "ERR: Service not recognise";
+			}
+
 		} catch (err:Dynamic) {
 			trace('ERROR: $err');
 			trace(haxe.CallStack.toString(haxe.CallStack.exceptionStack()));
@@ -267,7 +240,157 @@ class Main {
 			res.end();
 		}
 	}
-	
+
+	static function serviceGitUploadPack(req:IncomingMessage, res:ServerResponse, params:Dynamic, infos:Dynamic, remote:String, local:String)
+	{
+		authenticate(params, infos, function (upRes) {
+			switch (upRes.statusCode) {
+			case 401, 403, 404:
+				res.writeHead(upRes.statusCode, upRes.headers);
+				res.end();
+				return;
+			case 200:  // ok
+			}
+
+			if (params.isInfoRequest) {
+				//update is always run to ensure that local repo is up to date
+				update(remote, local, infos, function (err) {
+					//after updating we check for errors and then call a service to update the caller
+					if (err != null) {
+						trace('ERR: $err');
+						trace(haxe.CallStack.toString(haxe.CallStack.exceptionStack()));
+						res.statusCode = 500;
+						res.end();
+						return;
+					}
+					res.statusCode = 200;
+					res.setHeader("Content-Type", 'application/x-${params.service}-advertisement');
+					res.setHeader("Cache-Control", "no-cache");
+					res.write("001e# service=git-upload-pack\n0000");
+					var up = ChildProcess.spawn(params.service, ["--stateless-rpc", "--advertise-refs", local]);
+					up.stdout.pipe(res);
+					up.stderr.on("data", function (data){ 
+						trace('${params.service} stderr: $data');
+					});
+					up.on("exit", function (code) {
+						if (code != 0)
+							res.end();
+						trace('INFO: ${params.service} done with exit $code');
+					});
+				});
+			} else {
+				res.statusCode = 200;
+				res.setHeader("Content-Type", 'application/x-${params.service}-result');
+				res.setHeader("Cache-Control", "no-cache");
+				var up = ChildProcess.spawn(params.service, ["--stateless-rpc", local]);
+				// If we receive gzip content, we must unzip
+				if (req.headers['content-encoding'] == 'gzip')
+					req.pipe(Zlib.createUnzip()).pipe(up.stdin);
+				else
+					req.pipe(up.stdin);
+				up.stdout.pipe(res);
+				up.stderr.on("data", function (data) trace('${params.service} stderr: $data'));
+				up.on("exit", function (code) {
+					if (code != 0)
+						res.end();
+					trace('${params.service} done with exit $code');
+					});
+			}
+		});
+	}
+
+	static function serviceLFSBatch(req:IncomingMessage, res:ServerResponse,  params:Dynamic, infos:Dynamic, remote:String, local:String)
+	{
+		//Do batch request
+		trace('Caught batch URL: '+ req.headers);
+		var bodyStr = "";
+		req.on('data', function (data) {
+			bodyStr += data;
+		});
+
+		req.on('end', function () {
+			var requestBody :{operation:String, objects:Array<Dynamic>} = haxe.Json.parse(bodyStr);
+
+			trace("Body: " + haxe.Json.stringify(requestBody, " "));
+
+			if(requestBody.operation == "download")
+			{
+				var resultBody = {
+					transfer : "basic",
+					objects :[]
+				};	
+
+				var path = Path.join(local, "lfs/objects"); 
+				trace(path);
+				
+				var remainingProcs = new List<Dynamic>();
+
+				var objects = new List<Dynamic>();
+				for(object in requestBody.objects){
+					var proc = ChildProcess.exec('find ' + path + " -name " + object.oid, function(err, stdout, stderr) {
+
+						var objResult = {
+							oid : object.oid,
+							size : 0,
+							authenticated:true,
+							actions : {
+								download : 
+								{
+									href: ""
+								}
+							},
+							expires_in: 2137483647 //TODO: when does this actually expire? 
+						};
+
+						if(err != null)
+						{
+							trace("could not find object: " + object.oid);
+						}
+						else
+						{
+							trace("found object: " + stdout);
+							var location:String = removeLineEndingsReg.replace(stdout, "");
+
+							var stats =sys.FileSystem.stat(location);
+							objResult.size = stats.size;
+
+							var downloadRef:String = "http://" + req.headers["host"] + location.substr(cacheDir.length); 
+							objResult.actions.download.href = downloadRef;
+
+							resultBody.objects.push(objResult);
+						}
+					});
+					
+					remainingProcs.add(proc);
+					proc.on('close', function(){
+						remainingProcs.pop();
+						if(remainingProcs.length <= 0)
+						{
+							res.writeHead(200, {'Content-Type' : 'application/vnd.git-lfs+json' });
+							trace("Sending content: \n" + haxe.Json.stringify(resultBody, " ")); 
+							res.end(haxe.Json.stringify(resultBody));
+						}
+					});
+
+				}
+			}
+			else if (requestBody.operation == "upload")
+			{
+				trace("LFS batch upload not supported");
+				res.statusCode = 501;
+				res.end();
+			}
+			else
+			{
+				throw "ERR: LFS batch operation not set or recognised";
+			}
+		});
+
+		req.on('error', function (error) {
+			trace("ERR reading IncommingMessage: " + error.message);
+		});
+	}
+
 	static var updatePromises = new Map<String, Promise<Dynamic>>();
 	static var removeLineEndingsReg = ~/(\r\n\t|\n|\r\t|\r\n|\r)/gm;
 	static var cacheDir = "/tmp/var/cache/git/";
