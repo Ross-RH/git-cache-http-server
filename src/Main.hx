@@ -33,6 +33,7 @@ class Main {
 
 		var gitr = ~/^\/(.+)(.git)?\/(info\/refs\?service=)?(git-[^-]+-pack)$/;
 		var lfsBatchr = ~/^\/(.+)(.git)?\/(objects\/batch)$/;	
+		var lfsGetr = ~/^\/(.+)(.git)?\/(lfs\/objects)\/([0-9a-fA-F\/]+)$/;	
 
 		//Match url for non lfs url 
 		trace('generating params from request url: ' + req.url);
@@ -49,6 +50,14 @@ class Main {
 				repo : removeLineEndingsReg.replace(lfsBatchr.matched(1), ""),
 				auth : parseAuth(req.headers["authorization"]),
 				service : "lfs-batch",
+				isInfoRequest : true
+			}
+		}
+		else if(lfsGetr.match(req.url)){
+			return{ 
+				repo : removeLineEndingsReg.replace(lfsGetr.matched(1), ""),
+				auth : parseAuth(req.headers["authorization"]),
+				service : "lfs-get",
 				isInfoRequest : true
 			}
 		}
@@ -199,8 +208,8 @@ class Main {
 			//}
 
 			//authenticate
-			if (params.service != "git-upload-pack" && params.service != "lfs-batch")
-				throw 'Service ${params.service} not supported yet';
+			//if (params.service != "git-upload-pack" && params.service != "lfs-batch")
+			//	throw 'Service ${params.service} not supported yet';
 
 			var remote = if (params.auth == null)
 				'https://${params.repo}';
@@ -228,9 +237,15 @@ class Main {
 				trace("Service: lfs-batch running...");
 				serviceLFSBatch(req, res, params, infos, remote, local);
 			}
+			else if (params.service == "lfs-get")
+			{
+				trace("");
+				trace("Service: lfs-get running...");
+				serviceLFSGet(req, res, params, infos, remote, local);
+			}
 			else
 			{
-				throw "ERR: Service not recognise";
+				throw "ERR: Service not recognised";
 			}
 
 		} catch (err:Dynamic) {
@@ -301,8 +316,6 @@ class Main {
 
 	static function serviceLFSBatch(req:IncomingMessage, res:ServerResponse,  params:Dynamic, infos:Dynamic, remote:String, local:String)
 	{
-		//Do batch request
-		trace('Caught batch URL: '+ req.headers);
 		var bodyStr = "";
 		req.on('data', function (data) {
 			bodyStr += data;
@@ -360,7 +373,9 @@ class Main {
 							resultBody.objects.push(objResult);
 						}
 					});
-					
+
+					//Dont know enough about node/haxe to know if there is a possibility of a race condition, assuming the processing only begins once the outer function exits and we go back to the event loop
+					//TODO: make sure it wont happen
 					remainingProcs.add(proc);
 					proc.on('close', function(){
 						remainingProcs.pop();
@@ -389,6 +404,48 @@ class Main {
 		req.on('error', function (error) {
 			trace("ERR reading IncommingMessage: " + error.message);
 		});
+	}
+
+
+	static function serviceLFSGet(req:IncomingMessage, res:ServerResponse,  params:Dynamic, infos:Dynamic, remote:String, local:String)
+	{
+		if(req.method != "GET")
+		{
+			trace("URL recognised as a request for an LFS object, but method is not get: " + req.method);
+			res.statusCode = 405;
+			res.end();
+		}
+
+		res.setHeader("Content-Type", "application/octet-stream");
+
+		//remove host from url to get path to object
+		//var location = cacheDir + req.url.substr(req.headers["host"].length); 
+		//trace("Getting file from" + location);
+
+		try{
+			//var fileBytes:Bytes = sys.io.File.getBytes(location);
+			//var stats =sys.FileSystem.stat(location);
+
+			//res.setHeader("Content-Length", "" + stats.size);
+
+			//Set bytes
+		//	res.end(fileBytes);
+
+
+		}catch(err:Dynamic)
+		{
+			trace("Loading file failed: " + err);
+			res.statusCode = 404;
+			res.end();
+		}
+
+		//TODO: get content and sen back as raw data
+		/*< HTTP/1.1 200 OK
+		  < Content-Type: application/octet-stream
+		  < Content-Length: 123
+		   */
+		//On cant find send 404
+
 	}
 
 	static var updatePromises = new Map<String, Promise<Dynamic>>();

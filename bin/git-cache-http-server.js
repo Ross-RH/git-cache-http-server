@@ -110,6 +110,7 @@ Main.parseAuth = function(s) {
 Main.getParams = function(req) {
 	var gitr = new EReg("^/(.+)(.git)?/(info/refs\\?service=)?(git-[^-]+-pack)$","");
 	var lfsBatchr = new EReg("^/(.+)(.git)?/(objects/batch)$","");
+	var lfsGetr = new EReg("^/(.+)(.git)?/(lfs/objects)/([0-9a-fA-F/]+)$","");
 	console.log("generating params from request url: " + req.url);
 	if(gitr.match(req.url)) {
 		var _this = Main.removeLineEndingsReg;
@@ -117,6 +118,9 @@ Main.getParams = function(req) {
 	} else if(lfsBatchr.match(req.url)) {
 		var _this1 = Main.removeLineEndingsReg;
 		return { repo : lfsBatchr.matched(1).replace(_this1.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : "lfs-batch", isInfoRequest : true};
+	} else if(lfsGetr.match(req.url)) {
+		var _this2 = Main.removeLineEndingsReg;
+		return { repo : lfsGetr.matched(1).replace(_this2.r,""), auth : Main.parseAuth(req.headers["authorization"]), service : "lfs-get", isInfoRequest : true};
 	} else {
 		throw new js__$Boot_HaxeError("Cannot deal with url");
 	}
@@ -229,9 +233,6 @@ Main.handleRequest = function(req,res) {
 		if(params.auth != null) {
 			infos += " (user " + Main.safeUser(params.auth.basic) + ")";
 		}
-		if(params.service != "git-upload-pack" && params.service != "lfs-batch") {
-			throw new js__$Boot_HaxeError("Service " + params.service + " not supported yet");
-		}
 		var remote = params.auth == null ? "https://" + params.repo : "https://" + params.auth.basic + "@" + params.repo;
 		console.log("Cache Dir: " + Main.cacheDir);
 		console.log("Repo: " + params.repo);
@@ -245,8 +246,12 @@ Main.handleRequest = function(req,res) {
 			console.log("");
 			console.log("Service: lfs-batch running...");
 			Main.serviceLFSBatch(req,res,params,infos,remote,local);
+		} else if(params.service == "lfs-get") {
+			console.log("");
+			console.log("Service: lfs-get running...");
+			Main.serviceLFSGet(req,res,params,infos,remote,local);
 		} else {
-			throw new js__$Boot_HaxeError("ERR: Service not recognise");
+			throw new js__$Boot_HaxeError("ERR: Service not recognised");
 		}
 	} catch( err ) {
 		haxe_CallStack.lastException = err;
@@ -318,7 +323,6 @@ Main.serviceGitUploadPack = function(req,res,params,infos,remote,local) {
 	});
 };
 Main.serviceLFSBatch = function(req,res,params,infos,remote,local) {
-	console.log("Caught batch URL: " + Std.string(req.headers));
 	var bodyStr = "";
 	req.on("data",function(data) {
 		bodyStr += data;
@@ -377,6 +381,22 @@ Main.serviceLFSBatch = function(req,res,params,infos,remote,local) {
 	req.on("error",function(error) {
 		console.log("ERR reading IncommingMessage: " + error.message);
 	});
+};
+Main.serviceLFSGet = function(req,res,params,infos,remote,local) {
+	if(req.method != "GET") {
+		console.log("URL recognised as a request for an LFS object, but method is not get: " + req.method);
+		res.statusCode = 405;
+		res.end();
+	}
+	res.setHeader("Content-Type","application/octet-stream");
+	try {
+	} catch( err ) {
+		haxe_CallStack.lastException = err;
+		if (err instanceof js__$Boot_HaxeError) err = err.val;
+		console.log("Loading file failed: " + Std.string(err));
+		res.statusCode = 404;
+		res.end();
+	}
 };
 Main.main = function() {
 	Main.version = "0.0.2";
